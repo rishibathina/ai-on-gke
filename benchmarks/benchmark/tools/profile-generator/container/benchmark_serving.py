@@ -11,6 +11,7 @@ import json
 import random
 import time
 from typing import AsyncGenerator, List, Tuple
+import random
 
 import aiohttp
 import numpy as np
@@ -113,19 +114,21 @@ async def send_request(
     use_beam_search: bool,
     top_k: int,
     tokenizer: PreTrainedTokenizerBase,
-    sax_model: str,
+    models: dict,
 ) -> None:
   """Sends request to server."""
   request_start_time = time.time()
-
+  
   headers = {"User-Agent": "Benchmark Client"}
+  temp = 0.0 if use_beam_search else 1.0
+
   if backend == "vllm":
     pload = {
         "prompt": prompt,
         "n": 1,
         "best_of": best_of,
         "use_beam_search": use_beam_search,
-        "temperature": 0.0 if use_beam_search else 1.0,
+        "temperature": temp,
         "top_p": 1.0,
         "max_tokens": output_len,
         "ignore_eos": False,
@@ -157,7 +160,7 @@ async def send_request(
         "text_input": prompt,
         "max_tokens": output_len,
         "beam_width": 1 if not use_beam_search else best_of,
-        "temperature": 0.0 if use_beam_search else 1.0,
+        "temperature": temp,
         "top_p": 1.0,
         "bad_words": "",
         "stop_words": "",
@@ -165,12 +168,12 @@ async def send_request(
     }
   elif backend == "sax":
     pload = {
-        "model": sax_model,
+        "model": model_picker(models),
         "prompt": prompt,
         "n": 1,
         "best_of": best_of,
         "use_beam_search": use_beam_search,
-        "temperature": 0.0 if use_beam_search else 1.0,
+        "temperature": temp,
         "top_p": 1.0,
         "top_k": 50,
         "max_tokens": output_len,
@@ -181,6 +184,14 @@ async def send_request(
         "prompt": prompt,
         "max_tokens": 1,
     }
+  elif backend == "open-ai":
+    pload = {
+      "model": model_picker(models),
+      "prompt": prompt,
+      "max_tokens": output_len,
+      "temperature": temp,
+    }
+    
   else:
     raise ValueError(f"Unknown backend: {backend}")
 
@@ -262,11 +273,34 @@ async def benchmark(
     tasks.append(task)
   await asyncio.gather(*tasks)
 
+def model_picker(models: dict) -> str:
+  vals = random.choices(
+                 population=list(models.keys()),
+                 weights=list(models.values()),
+                 k=1)
+  return vals[0]
+
+def parse_models(models):
+  model_map = {}
+  for m in models:
+    chunks = m.split(":")
+    if len(chunks) == 1:
+      model_map[chunks] = 10
+    elif len(chunks) == 2:
+      model_map[chunks[0]] = int(chunks[1])
+    else:
+      print(f"error parsing models for list {models}")
+      return
+  
+  return model_map
+
 
 def main(args: argparse.Namespace):
   print(args)
   random.seed(args.seed)
   np.random.seed(args.seed)
+  if args.model:
+    models = parse_models(args.model)
 
   api_url = f"http://{args.host}:{args.port}/{args.endpoint}"
   tokenizer = AutoTokenizer.from_pretrained(
@@ -292,7 +326,7 @@ def main(args: argparse.Namespace):
           args.request_rate,
           args.top_k,
           tokenizer,
-          args.sax_model,
+          models,
       )
   )
   benchmark_end_time = time.time()
@@ -375,14 +409,15 @@ if __name__ == "__main__":
           "naive_transformers",
           "tensorrt_llm_triton",
           "sax",
-          "jetstream"
+          "jetstream",
+          "open-ai"
       ],
   )
   parser.add_argument(
-      "--sax_model",
-      type=str,
-      default="",
-      help="Model name to send request to at API server for SAX model server.",
+      "--model",
+      action='extend',
+      nargs='+',
+      help="Models, with weights, to send requests to. Model is selected at random using the weighting. Shared in the form '--model model-name:weight'. If weight is omitted, will default to 10.",
   )
   parser.add_argument("--endpoint", type=str, default="generate")
   parser.add_argument("--host", type=str, default="localhost")

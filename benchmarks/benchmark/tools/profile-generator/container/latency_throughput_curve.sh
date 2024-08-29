@@ -19,9 +19,19 @@ export IP=$IP
 
 huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
 
+# Splits model list by ',' and gives them each their own '--model' flag
+model_array=()
+if [ ${#MODELS} -ge 1 ]; then
+    readarray -d , -t strarr <<< "$MODELS"
+    for (( n=0; n < ${#strarr[*]}; n++))
+    do
+      model_array+=("--model $(echo ${strarr[n]} | tr -d '\n')")
+    done
+fi
+
 for request_rate in $(echo $REQUEST_RATES | tr ',' ' '); do
   # TODO: Check if profile already exists, if so then skip
   timestamp=$(date +"%Y-%m-%d_%H-%M-%S")
   output_file="latency-profile-${timestamp}.txt"
-  python3 benchmark_serving.py   --host="$IP"   --port="$PORT"   --dataset=ShareGPT_V3_unfiltered_cleaned_split.json   --tokenizer="$TOKENIZER" --request-rate=$request_rate --backend="$BACKEND" --num-prompts=$((request_rate * 30)) --max-input-length=$INPUT_LENGTH --max-output-length=$OUTPUT_LENGTH > $output_file
+  python3 benchmark_serving.py   --host="$IP"   --port="$PORT"   --dataset=ShareGPT_V3_unfiltered_cleaned_split.json   --tokenizer="$TOKENIZER" --request-rate=$request_rate --backend="$BACKEND" --num-prompts=$((request_rate * 30)) --max-input-length=$INPUT_LENGTH --max-output-length=$OUTPUT_LENGTH ${model_array[@]} > $output_file
 done
